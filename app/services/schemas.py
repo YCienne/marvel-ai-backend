@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import Optional, List, Any, Literal
+from typing import Optional, List, Any, Literal, Union
 from enum import Enum
 from app.services.assistant_registry import AssistantInputs
 from app.services.tool_registry import BaseTool
@@ -22,7 +22,7 @@ class MessageType(str, Enum):
     file = "file"
 
 class MessagePayload(BaseModel):
-    text: str | dict
+    text: Union[str, dict]
 
 class Message(BaseModel):
     role: Role
@@ -105,10 +105,10 @@ class ConnectWithThemArgs(BaseModel):
     grade_level: str = Field(..., description="The grade level the teacher is instructing.")
     task_description: str = Field(..., description="A brief description of the subject or topic the teacher is instructing.")
     students_description: str = Field(..., description="A description of the students including age group, interests, location, and any relevant cultural or social factors.")
-    td_file_url: str 
-    td_file_type: str 
-    sd_file_url: str
-    sd_file_type: str
+    task_description_file_url: str 
+    task_description_file_type: str 
+    student_description_file_url: str
+    student_description_file_type: str
     lang: str = Field(..., description="The language in which the subject is being taught.")
 
 class PresentationGeneratorInput(BaseModel):
@@ -119,19 +119,19 @@ class PresentationGeneratorInput(BaseModel):
     additional_comments: str
     objectives_file_url: str
     objectives_file_type: str
-    ac_file_url: str
-    ac_file_type: str
+    additional_comments_file_url: str
+    additional_comments_file_type: str
     lang: Optional[str] = "en"
 
 class RubricGeneratorArgs(BaseModel):
     grade_level: Literal["pre-k", "kindergarten", "elementary", "middle", "high", "university", "professional"]
     point_scale: int
     objectives: str
-    assignment_desc: str
+    assignment_description: str
     objectives_file_url: str
     objectives_file_type: str
-    ad_file_url: str
-    ad_file_type: str
+    assignment_description_file_url: str
+    assignment_description_file_type: str
     lang: Optional[str]
 
 class LessonPlanGeneratorArgs(BaseModel):
@@ -141,8 +141,8 @@ class LessonPlanGeneratorArgs(BaseModel):
     additional_customization: str
     objectives_file_url: str
     objectives_file_type: str
-    ac_file_url: str
-    ac_file_type: str
+    additional_customization_file_url: str
+    additional_customization_file_type: str
     lang: Optional[str] = "en"
 
 class WritingFeedbackGeneratorArgs(BaseModel):
@@ -157,16 +157,6 @@ class WritingFeedbackGeneratorArgs(BaseModel):
     lang: Optional[str] = "en"
     
 class NotesGeneratorArgs(BaseModel):
-    """
-    Schema for Notes Generator arguments.
-
-    Attributes:
-        input_text (str): The primary content to generate notes from.
-        focus (str): The main topic or focus area for the notes.
-        file_url (Optional[str]): URL of the document to process, if applicable.
-        file_type (Optional[str]): The type of file being processed (CSV, PDF, DOCX, etc.).
-        lang (str): The language of the generated notes.
-    """
     input_text: str
     focus: str
     file_url: Optional[str] = None
