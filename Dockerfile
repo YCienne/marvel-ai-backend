@@ -20,3 +20,4 @@ COPY ./app /code/app
 ENV PYTHONPATH=/code/app
 
 CMD ["fastapi", "dev", "app/main.py", "--host=0.0.0.0", "--port=8000"]
+
