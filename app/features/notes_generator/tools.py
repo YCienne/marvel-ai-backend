@@ -1,64 +1,136 @@
-import os
-from dotenv import load_dotenv
-from google.auth import default
-from google.auth.transport.requests import Request
-from google.auth.exceptions import DefaultCredentialsError
-from vertexai.preview.language_models import TextGenerationModel
-from vertexai import init
-from langchain.tools import tool
-from app.features.notes_generator.models import NotesGeneratorInput
+from typing import List, Optional, Dict, Any
+from pydantic import BaseModel
+from langchain_core.documents import Document
+from langchain_community.vectorstores import Chroma
+from langchain_core.prompts import PromptTemplate
+from langchain_core.runnables import RunnableParallel
+from langchain_core.output_parsers import JsonOutputParser
+from langchain_google_genai import GoogleGenerativeAI
+from langchain_google_genai import GoogleGenerativeAIEmbeddings
+from app.services.logger import setup_logger
 
-# Load environment variables
-load_dotenv()
+logger = setup_logger(__name__)
 
-PROJECT_ID = os.getenv("PROJECT_ID")
-LOCATION = os.getenv("LOCATION", "us-central1")
-
-if not PROJECT_ID:
-    raise ValueError("PROJECT_ID must be set in the environment variables.")
-
-# Google Cloud Authentication 
-try:
-    credentials, project = default()
-    credentials.refresh(Request()) 
-    print(f"Authenticated with project: {project}")
-except DefaultCredentialsError as e:
-    print(f"Authentication failed: {str(e)}")
-    raise e 
-
-# Initialize Vertex AI
-init(project=PROJECT_ID, location=LOCATION)
-
-# Core function to generate notes
-def _generate_notes(input_text: str, output_format: str) -> str:
-    try:
-        # text generation model 
-        model = TextGenerationModel.from_pretrained("gemini-pro")
-
-        prompt = f"Generate structured notes in {output_format} format for the following text:\n\n{input_text}"
-
-        response = model.predict(
-            prompt=prompt,
-            temperature=0.7,
-            max_output_tokens=1024,
-        )
-
-        return response.text
-    except Exception as e:
-        raise ValueError(f"Error in _generate_notes: {str(e)}")
-
-
-# LangChain-compatible tool
-@tool("generate_structured_notes", return_direct=True)
-def generate_notes_tool(input_text: str, output_format: str = "bullet points") -> str:
+class NotesGeneratorPipeline:
     """
-    Generates structured notes using Vertex AI based on input text and desired format.
-    
-    Parameters:
-    - input_text: Raw text to process
-    - output_format: Format of notes (e.g., bullet points, paragraph, table)
+    A pipeline for generating structured notes from text or documents.
 
-    Returns:
-    - str: Structured notes
+    Attributes:
+        verbose (bool): Enables detailed logging if set to True.
+        args (Optional[Any]): Configuration arguments for the pipeline.
+        model (GoogleGenerativeAI): AI model for text generation.
+        embedding_model (GoogleGenerativeAIEmbeddings): Model for embeddings.
+        vectorstore_class (Chroma): Vector database for document retrieval.
+        parsers (Dict[str, JsonOutputParser]): JSON output parsers for different formats.
+        vectorstore (Optional[Chroma]): Stores document embeddings for retrieval.
+        retriever (Optional[Any]): Mechanism to retrieve relevant documents.
     """
-    return _generate_notes(input_text, output_format)
+
+    def __init__(self, args: Optional[Any] = None, verbose: bool = False) -> None:
+        """
+        Initializes the NotesGeneratorPipeline.
+
+        Args:
+            args (Optional[Any]): Configuration arguments for the pipeline.
+            verbose (bool): Enables detailed logging if set to True.
+        """
+        self.verbose: bool = verbose
+        self.args: Optional[Any] = args
+        self.model: GoogleGenerativeAI = GoogleGenerativeAI(model="gemini-1.5-pro")
+        self.embedding_model: GoogleGenerativeAIEmbeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
+        self.vectorstore_class: Chroma = Chroma
+        self.parsers: Dict[str, JsonOutputParser] = {
+            "summary": JsonOutputParser(pydantic_object=Summary),
+            "bullet_points": JsonOutputParser(pydantic_object=BulletPoints),
+            "table": JsonOutputParser(pydantic_object=StructuredTable)
+        }
+        self.vectorstore: Optional[Chroma] = None
+        self.retriever: Optional[Any] = None
+
+    def compile_vectorstore(self, documents: List[Document]) -> None:
+        """
+        Creates a vectorstore from the given documents for retrieval.
+
+        Args:
+            documents (List[Document]): List of documents to store and retrieve context from.
+        """
+        if self.verbose:
+            logger.info("Creating vectorstore from documents...")
+        self.vectorstore = self.vectorstore_class.from_documents(documents, self.embedding_model)
+        self.retriever = self.vectorstore.as_retriever()
+        if self.verbose:
+            logger.info("Vectorstore and retriever created successfully.")
+
+    def compile_pipeline(self) -> RunnableParallel:
+        """
+        Compiles a processing pipeline using AI-generated structured notes.
+
+        Returns:
+            RunnableParallel: A parallel pipeline containing different processing branches.
+        """
+        prompts: Dict[str, PromptTemplate] = {
+            "summary": PromptTemplate(
+                template="Summarize the content related to {focus}. Respond in JSON format: \n{format_instructions}",
+                input_variables=["focus"],
+                partial_variables={"format_instructions": self.parsers["summary"].get_format_instructions()},
+            ),
+            "bullet_points": PromptTemplate(
+                template="Convert the content into bullet points focusing on {focus}. Respond in JSON format: \n{format_instructions}",
+                input_variables=["focus"],
+                partial_variables={"format_instructions": self.parsers["bullet_points"].get_format_instructions()},
+            ),
+            "table": PromptTemplate(
+                template="Organize key information about {focus} into a structured table. Respond in JSON format: \n{format_instructions}",
+                input_variables=["focus"],
+                partial_variables={"format_instructions": self.parsers["table"].get_format_instructions()},
+            )
+        }
+        chains: Dict[str, Any] = {key: prompt | self.model | self.parsers[key] for key, prompt in prompts.items()}
+        return RunnableParallel(branches=chains)
+
+    def generate_notes_executor(self, documents: Optional[List[Document]]) -> Dict[str, Any]:
+        """
+        Generates structured notes from input documents.
+
+        Args:
+            documents (Optional[List[Document]]): Documents to process for note generation.
+
+        Returns:
+            Dict[str, Any]: Dictionary containing structured notes in different formats.
+        """
+        if documents:
+            self.compile_vectorstore(documents)
+
+        pipeline: RunnableParallel = self.compile_pipeline()
+
+        inputs: Dict[str, str] = {
+            "focus": self.args.focus,
+        }
+        results: Dict[str, Dict[str, Any]] = pipeline.invoke(inputs)
+        notes: Dict[str, Any] = {
+            "summary": results["branches"]["summary"]["text"],
+            "bullet_points": results["branches"]["bullet_points"]["points"],
+            "table": results["branches"]["table"]["rows"],
+        }
+        if self.verbose:
+            logger.info("Notes successfully generated.")
+        return notes
+
+# Models for structured output
+
+class Summary(BaseModel):
+    """Represents a textual summary."""
+    text: str
+
+class BulletPoints(BaseModel):
+    """Represents bullet points extracted from content."""
+    points: List[str]
+
+class TableRow(BaseModel):
+    """Represents a single row of a structured table."""
+    column1: str
+    column2: str
+
+class StructuredTable(BaseModel):
+    """Represents a structured table with multiple rows."""
+    rows: List[TableRow]

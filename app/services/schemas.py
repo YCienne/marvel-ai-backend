@@ -3,6 +3,7 @@ from typing import Optional, List, Any, Literal
 from enum import Enum
 from app.services.assistant_registry import AssistantInputs
 from app.services.tool_registry import BaseTool
+from typing import Dict
 
 class User(BaseModel):
     id: str
@@ -154,3 +155,23 @@ class WritingFeedbackGeneratorArgs(BaseModel):
     wtr_file_url: str
     wtr_file_type: str
     lang: Optional[str] = "en"
+    
+class NotesGeneratorArgs(BaseModel):
+    """
+    Schema for Notes Generator arguments.
+
+    Attributes:
+        input_text (str): The primary content to generate notes from.
+        focus (str): The main topic or focus area for the notes.
+        file_url (Optional[str]): URL of the document to process, if applicable.
+        file_type (Optional[str]): The type of file being processed (CSV, PDF, DOCX, etc.).
+        lang (str): The language of the generated notes.
+    """
+    input_text: str
+    focus: str
+    file_url: Optional[str] = None
+    file_type: Optional[str] = None
+    lang: str = "en"
+
+class NotesResponse(BaseModel):
+    data: Dict[str, Any]
